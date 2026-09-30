@@ -82,67 +82,119 @@ export function removeStoredToken(): void {
 }
 
 export async function loginUser(credentials: SignInCredentials): Promise<{ user: User; token: string }> {
-  const response = await fetch('/api/v1/auth/login', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email: credentials.email, password: credentials.password })
-  });
-  const data = await response.json();
-  if (!response.ok || !data.success) {
-    throw new Error(data.message || 'Invalid Login ID/Email or password credentials.');
+  try {
+    const response = await fetch('/api/v1/auth/login', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ email: credentials.email, password: credentials.password })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.user) {
+        const safeUser: User = {
+          ...data.user,
+          company_name: 'My Buddy',
+          user_id: String(data.user.id),
+        };
+        setStoredToken(data.token);
+        return { user: safeUser, token: data.token };
+      }
+    }
+  } catch {
+    // Backend unavailable or static export environment
   }
-  const safeUser: User = {
-    ...data.user,
-    company_name: 'My Buddy',
-    user_id: String(data.user.id),
-  };
-  setStoredToken(data.token);
-  return { user: safeUser, token: data.token };
+
+  // Fallback to local storage store for static GitHub Pages hosting
+  initLocalStore();
+  const users = getStoredUsers();
+  const found = users.find(
+    (u) =>
+      (u.email.toLowerCase() === credentials.email.toLowerCase() ||
+        u.employee_id.toLowerCase() === credentials.email.toLowerCase()) &&
+      u.password === credentials.password
+  );
+
+  if (!found) {
+    throw new Error('Invalid Login ID/Email or password credentials.');
+  }
+
+  const { password, ...safeUser } = found;
+  const token = createJWT(safeUser);
+  setStoredToken(token);
+  return { user: safeUser, token };
 }
 
 export async function registerUser(credentials: SignUpCredentials): Promise<{ user: User; token: string }> {
-  // Parse name into first and last name
   const nameParts = credentials.name.trim().split(' ');
   const first_name = nameParts[0] || 'User';
   const last_name = nameParts.slice(1).join(' ') || '';
-
-  const employee_id =
-    credentials.employee_id ||
-    `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
-
+  const employee_id = credentials.employee_id || `EMP-${Math.floor(1000 + Math.random() * 9000)}`;
   const role: UserRole = credentials.role || 'HR_ADMIN';
 
-  const response = await fetch('/api/v1/auth/register', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ 
-      employee_id, 
-      first_name, 
-      last_name, 
-      email: credentials.email, 
-      password: credentials.password, 
-      role 
-    })
-  });
-  const data = await response.json();
-  if (!response.ok || !data.success) {
-    throw new Error(data.detail?.message || data.message || 'Failed to register account.');
+  try {
+    const response = await fetch('/api/v1/auth/register', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ 
+        employee_id, 
+        first_name, 
+        last_name, 
+        email: credentials.email, 
+        password: credentials.password, 
+        role 
+      })
+    });
+    if (response.ok) {
+      const data = await response.json();
+      if (data.success && data.data) {
+        const safeUser: User = {
+          user_id: String(data.data.user_id),
+          company_name: credentials.company_name || 'My Buddy',
+          employee_id: data.data.employee_id,
+          first_name: data.data.first_name,
+          last_name: data.data.last_name,
+          email: data.data.email,
+          role: data.data.role,
+        };
+        const token = data.data.verification_token || createJWT(safeUser);
+        setStoredToken(token);
+        return { user: safeUser, token };
+      }
+    }
+  } catch {
+    // Backend unavailable or static export environment
   }
 
-  const safeUser: User = {
-    user_id: String(data.data.user_id),
-    company_name: credentials.company_name || 'My Buddy',
-    employee_id: data.data.employee_id,
-    first_name: data.data.first_name,
-    last_name: data.data.last_name,
-    email: data.data.email,
-    role: data.data.role,
-  };
-  
-  // Wait, backend register returns token in verification flow, we need to login or mock token for now
-  const token = data.data.verification_token || createJWT(safeUser);
-  setStoredToken(token);
+  // Fallback to local storage store for static GitHub Pages hosting
+  initLocalStore();
+  const users = getStoredUsers();
+  const existingUser = users.find((u) => u.email.toLowerCase() === credentials.email.toLowerCase());
+  if (existingUser) {
+    throw new Error('An account with this email address already exists.');
+  }
 
+  const newUser: StoredUser = {
+    user_id: `usr_${Date.now()}`,
+    company_name: credentials.company_name || 'My Buddy',
+    employee_id,
+    first_name,
+    last_name,
+    name: credentials.name.trim(),
+    email: credentials.email.trim(),
+    role,
+    password: credentials.password,
+    job_title: role === 'HR_ADMIN' ? 'HR Administrator' : 'Software Engineer',
+    department: 'People Operations',
+    joining_date: new Date().toISOString().slice(0, 10),
+    attendance_status: 'PRESENT',
+  };
+
+  const updatedUsers = [...users, newUser];
+  localStorage.setItem(USERS_KEY, JSON.stringify(updatedUsers));
+
+  const { password, ...safeUser } = newUser;
+  const token = createJWT(safeUser);
+  setStoredToken(token);
   return { user: safeUser, token };
 }
 
