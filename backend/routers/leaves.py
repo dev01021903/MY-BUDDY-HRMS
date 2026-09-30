@@ -1,5 +1,6 @@
 import datetime
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.db import get_db
@@ -41,7 +42,7 @@ def calculate_working_days(start_str: str, end_str: str) -> int:
 async def apply_for_leave(
     payload: LeaveApplySchema,
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 7.1: Apply for Leave (Employee):
@@ -52,7 +53,7 @@ async def apply_for_leave(
     days_count = calculate_working_days(payload.start_date, payload.end_date)
 
     cursor = db.cursor()
-    cursor.execute("SELECT leave_balance_paid, leave_balance_sick FROM users WHERE id = ?", (user_id,))
+    cursor.execute("SELECT leave_balance_paid, leave_balance_sick FROM users WHERE id = %s", (user_id,))
     user = cursor.fetchone()
 
     # Balance validation
@@ -75,10 +76,10 @@ async def apply_for_leave(
 
     cursor.execute("""
         INSERT INTO leave_requests (user_id, leave_type, start_date, end_date, leave_reason, leave_status)
-        VALUES (?, ?, ?, ?, ?, 'PENDING')
+        VALUES (%s, %s, %s, %s, %s, 'PENDING') RETURNING leave_id
     """, (user_id, payload.leave_type, payload.start_date, payload.end_date, payload.leave_reason.strip()))
     db.commit()
-    leave_id = cursor.lastrowid
+    leave_id = cursor.fetchone()["leave_id"]
 
     return {
         "success": True,
@@ -97,7 +98,7 @@ async def apply_for_leave(
 @router.get("/my-requests")
 async def get_my_leave_requests(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Fetch all personal leave applications submitted by employee.
@@ -106,7 +107,7 @@ async def get_my_leave_requests(
     cursor.execute("""
         SELECT leave_id, user_id, leave_type, start_date, end_date, leave_reason, leave_status, admin_comment, created_at
         FROM leave_requests
-        WHERE user_id = ?
+        WHERE user_id = %s
         ORDER BY created_at DESC
     """, (current_user["user_id"],))
     rows = cursor.fetchall()
@@ -131,7 +132,7 @@ async def get_my_leave_requests(
 @router.get("/admin/queue")
 async def get_admin_leave_queue(
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 7.2: Leave Approval Queue (Admin/HR):
@@ -176,7 +177,7 @@ async def action_leave_request(
     leave_id: int,
     payload: AdminActionLeaveSchema,
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 7.2: Updating the state sets leave_status to APPROVED or REJECTED
@@ -188,7 +189,7 @@ async def action_leave_request(
                u.leave_balance_paid, u.leave_balance_sick
         FROM leave_requests l
         JOIN users u ON l.user_id = u.id
-        WHERE l.leave_id = ?
+        WHERE l.leave_id = %s
     """, (leave_id,))
     leave = cursor.fetchone()
 
@@ -204,17 +205,17 @@ async def action_leave_request(
     if payload.leave_status == "APPROVED" and leave["leave_status"] != "APPROVED":
         if leave["leave_type"] == "PAID":
             new_bal = max(0, (leave["leave_balance_paid"] or 18) - days_count)
-            cursor.execute("UPDATE users SET leave_balance_paid = ? WHERE id = ?", (new_bal, leave["user_id"]))
+            cursor.execute("UPDATE users SET leave_balance_paid = %s WHERE id = %s", (new_bal, leave["user_id"]))
         elif leave["leave_type"] == "SICK":
             new_bal = max(0, (leave["leave_balance_sick"] or 10) - days_count)
-            cursor.execute("UPDATE users SET leave_balance_sick = ? WHERE id = ?", (new_bal, leave["user_id"]))
+            cursor.execute("UPDATE users SET leave_balance_sick = %s WHERE id = %s", (new_bal, leave["user_id"]))
 
     comment = payload.admin_comment or f"Decision {payload.leave_status} by HR Admin ({admin_user.get('email')})"
 
     cursor.execute("""
         UPDATE leave_requests 
-        SET leave_status = ?, admin_comment = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE leave_id = ?
+        SET leave_status = %s, admin_comment = %s, updated_at = CURRENT_TIMESTAMP
+        WHERE leave_id = %s
     """, (payload.leave_status, comment, leave_id))
     db.commit()
 

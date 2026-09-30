@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
-import sqlite3
+import psycopg2
+import psycopg2.extras
 
 from backend.db import get_db
 from backend.middleware import get_current_user
@@ -14,7 +15,7 @@ router = APIRouter(
 @router.get("/")
 async def list_accessible_users(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Role-based user list:
@@ -35,7 +36,7 @@ async def list_accessible_users(
         cursor.execute("""
             SELECT id, employee_id, first_name, last_name, email, role, is_verified, created_at, failed_login_attempts, locked_until 
             FROM users 
-            WHERE id = ?
+            WHERE id = %s
         """, (current_user["user_id"],))
         rows = cursor.fetchall()
 
@@ -65,7 +66,7 @@ async def list_accessible_users(
 async def get_user_by_id(
     user_id: int,
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Role-based single user lookup:
@@ -89,7 +90,7 @@ async def get_user_by_id(
     cursor = db.cursor()
     cursor.execute("""
         SELECT id, employee_id, first_name, last_name, email, role, is_verified, failed_login_attempts, locked_until, created_at 
-        FROM users WHERE id = ?
+        FROM users WHERE id = %s
     """, (user_id,))
     user = cursor.fetchone()
 

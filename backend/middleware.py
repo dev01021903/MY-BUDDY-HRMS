@@ -1,7 +1,8 @@
 from fastapi import Header, HTTPException, status, Depends
 from typing import List, Union
 import datetime
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import jwt
 
 from backend.security import decode_access_token
@@ -47,7 +48,7 @@ async def get_current_user(authorization: Union[str, None] = Header(default=None
         # Check server-side 2-minute inactivity
         conn = get_db_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT id, last_activity, role, is_email_verified FROM users WHERE id = ?", (user_id,))
+        cursor.execute("SELECT id, last_activity, role, is_email_verified FROM users WHERE id = %s", (user_id,))
         user = cursor.fetchone()
 
         if not user:
@@ -82,7 +83,7 @@ async def get_current_user(authorization: Union[str, None] = Header(default=None
 
         # Update last_activity to current timestamp for active sessions
         now_str = datetime.datetime.now(datetime.timezone.utc).isoformat()
-        cursor.execute("UPDATE users SET last_activity = ? WHERE id = ?", (now_str, user_id))
+        cursor.execute("UPDATE users SET last_activity = %s WHERE id = %s", (now_str, user_id))
         conn.commit()
         conn.close()
 

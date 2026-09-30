@@ -1,4 +1,5 @@
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 from typing import Optional
@@ -18,7 +19,7 @@ router = APIRouter(
 @router.get("")
 async def get_profile(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 5.1: Profile View Component:
@@ -30,7 +31,7 @@ async def get_profile(
         SELECT id, employee_id, first_name, last_name, email, role, phone, address, profile_picture_url,
                job_title, department, joining_date, documents_url, salary_base, salary_allowances,
                salary_deductions, net_salary, leave_balance_paid, leave_balance_sick, is_email_verified, created_at
-        FROM users WHERE id = ?
+        FROM users WHERE id = %s
     """, (current_user["user_id"],))
     u = cursor.fetchone()
 
@@ -52,7 +53,7 @@ async def get_profile(
             "role": u["role"],
             "phone": u["phone"] or "Not provided",
             "address": u["address"] or "Not provided",
-            "profile_picture_url": u["profile_picture_url"] or "https://images.unsplash.com/photo-1534528741775-53994a69daeb?w=150",
+            "profile_picture_url": u["profile_picture_url"] or "https://images.unsplash.com/photo-1534528741775-53994a69daeb%sw=150",
             "job_title": u["job_title"],
             "department": u["department"],
             "joining_date": u["joining_date"],
@@ -72,7 +73,7 @@ async def get_profile(
 async def update_self_profile(
     payload: EmployeeSelfProfileUpdateSchema,
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 5.2: Role-Based Field Security:
@@ -83,13 +84,13 @@ async def update_self_profile(
     params = []
 
     if payload.phone is not None:
-        updates.append("phone = ?")
+        updates.append("phone = %s")
         params.append(payload.phone.strip())
     if payload.address is not None:
-        updates.append("address = ?")
+        updates.append("address = %s")
         params.append(payload.address.strip())
     if payload.profile_picture_url is not None:
-        updates.append("profile_picture_url = ?")
+        updates.append("profile_picture_url = %s")
         params.append(payload.profile_picture_url.strip())
 
     if not updates:
@@ -98,7 +99,7 @@ async def update_self_profile(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(current_user["user_id"])
 
-    cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+    cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = %s", params)
     db.commit()
 
     return {
@@ -111,7 +112,7 @@ async def admin_update_profile(
     target_user_id: int,
     payload: AdminProfileUpdateSchema,
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 5.2: Role-Based Field Security:
@@ -119,7 +120,7 @@ async def admin_update_profile(
     including documents_url, organizational placement, and compensation logic.
     """
     cursor = db.cursor()
-    cursor.execute("SELECT id, email, salary_base, salary_allowances, salary_deductions FROM users WHERE id = ?", (target_user_id,))
+    cursor.execute("SELECT id, email, salary_base, salary_allowances, salary_deductions FROM users WHERE id = %s", (target_user_id,))
     target = cursor.fetchone()
 
     if not target:
@@ -132,28 +133,28 @@ async def admin_update_profile(
     params = []
 
     if payload.phone is not None:
-        updates.append("phone = ?")
+        updates.append("phone = %s")
         params.append(payload.phone.strip())
     if payload.address is not None:
-        updates.append("address = ?")
+        updates.append("address = %s")
         params.append(payload.address.strip())
     if payload.profile_picture_url is not None:
-        updates.append("profile_picture_url = ?")
+        updates.append("profile_picture_url = %s")
         params.append(payload.profile_picture_url.strip())
     if payload.job_title is not None:
-        updates.append("job_title = ?")
+        updates.append("job_title = %s")
         params.append(payload.job_title.strip())
     if payload.department is not None:
-        updates.append("department = ?")
+        updates.append("department = %s")
         params.append(payload.department.strip())
     if payload.documents_url is not None:
-        updates.append("documents_url = ?")
+        updates.append("documents_url = %s")
         params.append(payload.documents_url.strip())
     if payload.leave_balance_paid is not None:
-        updates.append("leave_balance_paid = ?")
+        updates.append("leave_balance_paid = %s")
         params.append(payload.leave_balance_paid)
     if payload.leave_balance_sick is not None:
-        updates.append("leave_balance_sick = ?")
+        updates.append("leave_balance_sick = %s")
         params.append(payload.leave_balance_sick)
 
     # Compensation calculation logic using 6-step calculation engine
@@ -183,10 +184,10 @@ async def admin_update_profile(
             )
 
         updates.extend([
-            "monthly_wage = ?", "basic_salary = ?", "hra = ?", "standard_allowance = ?",
-            "performance_bonus = ?", "lta = ?", "fixed_allowance = ?", "pf_employee = ?",
-            "pf_employer = ?", "professional_tax = ?", "salary_config = ?",
-            "salary_base = ?", "salary_allowances = ?", "salary_deductions = ?", "net_salary = ?"
+            "monthly_wage = %s", "basic_salary = %s", "hra = %s", "standard_allowance = %s",
+            "performance_bonus = %s", "lta = %s", "fixed_allowance = %s", "pf_employee = %s",
+            "pf_employer = %s", "professional_tax = %s", "salary_config = %s",
+            "salary_base = %s", "salary_allowances = %s", "salary_deductions = %s", "net_salary = %s"
         ])
         params.extend([
             calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
@@ -196,16 +197,16 @@ async def admin_update_profile(
         ])
 
         # Update matching payroll table record
-        cursor.execute("SELECT payroll_id FROM payroll WHERE user_id = ?", (target_user_id,))
+        cursor.execute("SELECT payroll_id FROM payroll WHERE user_id = %s", (target_user_id,))
         if cursor.fetchone():
             cursor.execute("""
                 UPDATE payroll 
-                SET monthly_wage = ?, basic_salary = ?, hra = ?, standard_allowance = ?,
-                    performance_bonus = ?, lta = ?, fixed_allowance = ?, pf_employee = ?,
-                    pf_employer = ?, professional_tax = ?, salary_config = ?,
-                    salary_base = ?, salary_allowances = ?, salary_deductions = ?, net_salary = ?,
+                SET monthly_wage = %s, basic_salary = %s, hra = %s, standard_allowance = %s,
+                    performance_bonus = %s, lta = %s, fixed_allowance = %s, pf_employee = %s,
+                    pf_employer = %s, professional_tax = %s, salary_config = %s,
+                    salary_base = %s, salary_allowances = %s, salary_deductions = %s, net_salary = %s,
                     updated_at = CURRENT_TIMESTAMP
-                WHERE user_id = ?
+                WHERE user_id = %s
             """, (
                 calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
                 calc["performance_bonus"], calc["lta"], calc["fixed_allowance"], calc["pf_employee"],
@@ -221,7 +222,7 @@ async def admin_update_profile(
                     professional_tax, salary_config, salary_base, salary_allowances,
                     salary_deductions, net_salary
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
             """, (
                 target_user_id,
                 calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
@@ -236,11 +237,11 @@ async def admin_update_profile(
     updates.append("updated_at = CURRENT_TIMESTAMP")
     params.append(target_user_id)
 
-    cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = ?", params)
+    cursor.execute(f"UPDATE users SET {', '.join(updates)} WHERE id = %s", params)
     db.commit()
 
     # Re-fetch for response
-    cursor.execute("SELECT salary_base, net_salary FROM users WHERE id = ?", (target_user_id,))
+    cursor.execute("SELECT salary_base, net_salary FROM users WHERE id = %s", (target_user_id,))
     final_u = cursor.fetchone()
 
     return {

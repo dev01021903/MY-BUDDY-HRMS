@@ -1,5 +1,6 @@
 import datetime
-import sqlite3
+import psycopg2
+import psycopg2.extras
 import secrets
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from pydantic import BaseModel, EmailStr
@@ -14,7 +15,7 @@ router = APIRouter(prefix="", tags=["Authentication Engine (Prompt 2)"])
 @router.post("/signup", status_code=status.HTTP_201_CREATED)
 @router.post("/api/auth/signup", status_code=status.HTTP_201_CREATED)
 @router.post("/api/v1/auth/register", status_code=status.HTTP_201_CREATED)
-async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get_db)):
+async def signup(payload: UserSignUpSchema, db: psycopg2.extensions.connection = Depends(get_db)):
     """
     Prompt 2: Registration Endpoint taking employee_id, first_name, last_name, email, password, and role.
     Triggers automated verification token generation and sets is_email_verified = false.
@@ -30,7 +31,7 @@ async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get
     cursor = db.cursor()
 
     # 2. Duplicate email check
-    cursor.execute("SELECT id FROM users WHERE email = ? COLLATE NOCASE", (payload.email,))
+    cursor.execute("SELECT id FROM users WHERE email = %s COLLATE NOCASE", (payload.email,))
     if cursor.fetchone():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -38,7 +39,7 @@ async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get
         )
 
     # 3. Duplicate employee_id check
-    cursor.execute("SELECT id FROM users WHERE employee_id = ?", (payload.employee_id,))
+    cursor.execute("SELECT id FROM users WHERE employee_id = %s", (payload.employee_id,))
     if cursor.fetchone():
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -56,7 +57,7 @@ async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get
             salary_base, salary_allowances, salary_deductions, net_salary,
             created_at, updated_at
         )
-        VALUES (?, ?, ?, ?, ?, ?, 0, ?, 5000.00, 500.00, 250.00, 5250.00, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        VALUES (%s, %s, %s, %s, %s, %s, 0, %s, 5000.00, 500.00, 250.00, 5250.00, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP) RETURNING id
     """, (
         payload.employee_id.strip(),
         payload.first_name.strip(),
@@ -67,12 +68,12 @@ async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get
         verification_token
     ))
     db.commit()
-    user_id = cursor.lastrowid
+    user_id = cursor.fetchone()["id"]
 
     # Create matching initial payroll entry
     cursor.execute("""
         INSERT INTO payroll (user_id, salary_base, salary_allowances, salary_deductions, net_salary)
-        VALUES (?, 5000.00, 500.00, 250.00, 5250.00)
+        VALUES (%s, 5000.00, 500.00, 250.00, 5250.00)
     """, (user_id,))
     db.commit()
 
@@ -97,7 +98,7 @@ async def signup(payload: UserSignUpSchema, db: sqlite3.Connection = Depends(get
 async def verify_email(
     token: str = Query(default=None),
     payload: VerifyEmailSchema = None,
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 2: Verification API (/verify-email?token=...) updating is_email_verified = true.
@@ -110,7 +111,7 @@ async def verify_email(
         )
 
     cursor = db.cursor()
-    cursor.execute("SELECT id, email, is_email_verified FROM users WHERE verification_token = ?", (actual_token,))
+    cursor.execute("SELECT id, email, is_email_verified FROM users WHERE verification_token = %s", (actual_token,))
     user = cursor.fetchone()
 
     if not user:
@@ -122,7 +123,7 @@ async def verify_email(
     cursor.execute("""
         UPDATE users 
         SET is_email_verified = 1, verification_token = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = %s
     """, (user["id"],))
     db.commit()
 
@@ -135,7 +136,7 @@ async def verify_email(
 @router.post("/login")
 @router.post("/api/auth/login")
 @router.post("/api/v1/auth/login")
-async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connection = Depends(get_db)):
+async def login(payload: UserLoginSchema, request: Request, db: psycopg2.extensions.connection = Depends(get_db)):
     """
     Prompt 2: Login endpoint taking email and password.
     Verifies credentials and email confirmation status (is_email_verified),
@@ -145,7 +146,7 @@ async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connecti
     cursor.execute("""
         SELECT id, employee_id, first_name, last_name, email, password_hash, role,
                is_email_verified, verification_token, failed_login_attempts, locked_until
-        FROM users WHERE email = ? COLLATE NOCASE
+        FROM users WHERE email = %s COLLATE NOCASE
     """, (payload.email.strip().lower(),))
     user = cursor.fetchone()
 
@@ -185,8 +186,8 @@ async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connecti
             locked_until = (now + datetime.timedelta(minutes=LOCKOUT_MINUTES)).isoformat()
             cursor.execute("""
                 UPDATE users 
-                SET failed_login_attempts = ?, locked_until = ?, updated_at = CURRENT_TIMESTAMP
-                WHERE id = ?
+                SET failed_login_attempts = %s, locked_until = %s, updated_at = CURRENT_TIMESTAMP
+                WHERE id = %s
             """, (new_attempts, locked_until, user["id"]))
             db.commit()
 
@@ -200,7 +201,7 @@ async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connecti
                 }
             )
         else:
-            cursor.execute("UPDATE users SET failed_login_attempts = ? WHERE id = ?", (new_attempts, user["id"]))
+            cursor.execute("UPDATE users SET failed_login_attempts = %s WHERE id = %s", (new_attempts, user["id"]))
             db.commit()
 
             raise HTTPException(
@@ -227,8 +228,8 @@ async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connecti
     # 4. Reset failed attempts & update last activity
     cursor.execute("""
         UPDATE users 
-        SET failed_login_attempts = 0, locked_until = NULL, last_activity = ?, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        SET failed_login_attempts = 0, locked_until = NULL, last_activity = %s, updated_at = CURRENT_TIMESTAMP
+        WHERE id = %s
     """, (now.isoformat(), user["id"]))
     db.commit()
 
@@ -260,7 +261,7 @@ async def login(payload: UserLoginSchema, request: Request, db: sqlite3.Connecti
 @router.get("/api/auth/me")
 @router.get("/api/v1/auth/me")
 @router.get("/me")
-async def get_me(current_user: dict = Depends(get_current_user), db: sqlite3.Connection = Depends(get_db)):
+async def get_me(current_user: dict = Depends(get_current_user), db: psycopg2.extensions.connection = Depends(get_db)):
     """
     Returns currently authenticated user identity context.
     """
@@ -268,7 +269,7 @@ async def get_me(current_user: dict = Depends(get_current_user), db: sqlite3.Con
     cursor.execute("""
         SELECT id, employee_id, first_name, last_name, email, role, phone, address, profile_picture_url,
                job_title, department, joining_date, documents_url, salary_base, net_salary, is_email_verified
-        FROM users WHERE id = ?
+        FROM users WHERE id = %s
     """, (current_user["user_id"],))
     u = cursor.fetchone()
 

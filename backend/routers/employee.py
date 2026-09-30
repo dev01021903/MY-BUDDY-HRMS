@@ -1,4 +1,5 @@
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status
 
 from backend.db import get_db
@@ -13,7 +14,7 @@ router = APIRouter(
 @router.get("/dashboard")
 async def get_employee_dashboard(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 4.1: Employee Dashboard:
@@ -28,7 +29,7 @@ async def get_employee_dashboard(
         SELECT id, employee_id, first_name, last_name, email, role, phone, address, profile_picture_url,
                job_title, department, joining_date, documents_url, salary_base, net_salary,
                leave_balance_paid, leave_balance_sick, is_email_verified
-        FROM users WHERE id = ?
+        FROM users WHERE id = %s
     """, (user_id,))
     u = cursor.fetchone()
 
@@ -36,14 +37,14 @@ async def get_employee_dashboard(
     cursor.execute("""
         SELECT attendance_id, attendance_date, check_in_time, check_out_time,
                is_within_geofence, attendance_status, approval_status, admin_comment
-        FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC, attendance_id DESC LIMIT 5
+        FROM attendance WHERE user_id = %s ORDER BY attendance_date DESC, attendance_id DESC LIMIT 5
     """, (user_id,))
     att_rows = cursor.fetchall()
 
     # 3. Active Leave Requests
     cursor.execute("""
         SELECT leave_id, leave_type, start_date, end_date, leave_reason, leave_status, admin_comment, created_at
-        FROM leave_requests WHERE user_id = ? ORDER BY created_at DESC LIMIT 5
+        FROM leave_requests WHERE user_id = %s ORDER BY created_at DESC LIMIT 5
     """, (user_id,))
     leave_rows = cursor.fetchall()
 

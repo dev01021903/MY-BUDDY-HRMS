@@ -1,5 +1,6 @@
 import datetime
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from typing import Optional
 
@@ -18,7 +19,7 @@ router = APIRouter(
 async def kiosk_check_in(
     payload: KioskCheckInSchema,
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 6.1 & 6.2: Automated Photo/Location Attendance Kiosk:
@@ -52,7 +53,7 @@ async def kiosk_check_in(
             check_in_latitude, check_in_longitude, is_within_geofence,
             attendance_status, approval_status, admin_comment
         )
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s) RETURNING attendance_id
     """, (
         user_id,
         today_str,
@@ -66,7 +67,7 @@ async def kiosk_check_in(
         comment
     ))
     db.commit()
-    attendance_id = cursor.lastrowid
+    attendance_id = cursor.fetchone()["attendance_id"]
 
     return {
         "success": True,
@@ -91,7 +92,7 @@ async def kiosk_check_in(
 async def kiosk_check_out(
     payload: KioskCheckOutSchema,
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 6.1: Record shift check-out timestamp.
@@ -103,7 +104,7 @@ async def kiosk_check_out(
     cursor = db.cursor()
     cursor.execute("""
         SELECT attendance_id FROM attendance
-        WHERE user_id = ? AND check_out_time IS NULL
+        WHERE user_id = %s AND check_out_time IS NULL
         ORDER BY attendance_id DESC LIMIT 1
     """, (user_id,))
     active = cursor.fetchone()
@@ -116,8 +117,8 @@ async def kiosk_check_out(
 
     cursor.execute("""
         UPDATE attendance 
-        SET check_out_time = ?, check_out_photo_url = ?
-        WHERE attendance_id = ?
+        SET check_out_time = %s, check_out_photo_url = %s
+        WHERE attendance_id = %s
     """, (time_str, payload.check_out_photo_url, active["attendance_id"]))
     db.commit()
 
@@ -133,7 +134,7 @@ async def kiosk_check_out(
 @router.get("/my-logs")
 async def get_my_attendance_logs(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Personal attendance logs list for authenticated employee.
@@ -144,7 +145,7 @@ async def get_my_attendance_logs(
                check_in_photo_url, check_out_photo_url, check_in_latitude, check_in_longitude,
                is_within_geofence, attendance_status, approval_status, admin_comment
         FROM attendance
-        WHERE user_id = ?
+        WHERE user_id = %s
         ORDER BY attendance_date DESC, attendance_id DESC
     """, (current_user["user_id"],))
     rows = cursor.fetchall()
@@ -175,7 +176,7 @@ async def get_monthly_calendar(
     month: Optional[str] = Query(default=None, description="YYYY-MM (e.g. 2026-08)"),
     user_id_query: Optional[int] = Query(default=None),
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 6.3: Monthly Interactive Calendar:
@@ -196,7 +197,7 @@ async def get_monthly_calendar(
         SELECT attendance_id, attendance_date, check_in_time, check_out_time,
                attendance_status, approval_status, is_within_geofence
         FROM attendance
-        WHERE user_id = ? AND attendance_date LIKE ?
+        WHERE user_id = %s AND attendance_date LIKE %s
         ORDER BY attendance_date ASC
     """, (target_user_id, f"{month_prefix}%"))
     att_rows = cursor.fetchall()
@@ -216,8 +217,8 @@ async def get_monthly_calendar(
     cursor.execute("""
         SELECT leave_id, leave_type, start_date, end_date, leave_status
         FROM leave_requests
-        WHERE user_id = ? AND leave_status = 'APPROVED'
-          AND (start_date LIKE ? OR end_date LIKE ?)
+        WHERE user_id = %s AND leave_status = 'APPROVED'
+          AND (start_date LIKE %s OR end_date LIKE %s)
     """, (target_user_id, f"{month_prefix}%", f"{month_prefix}%"))
     leave_rows = cursor.fetchall()
 
@@ -249,7 +250,7 @@ async def get_monthly_calendar(
 @router.get("/admin/flagged")
 async def get_admin_flagged_attendance(
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 6.2: Dedicated HR Admin Queue for Flagged Location / Photo Attendance.
@@ -284,7 +285,7 @@ async def get_admin_flagged_attendance(
             "attendance_status": r["attendance_status"],
             "approval_status": r["approval_status"],
             "admin_comment": r["admin_comment"],
-            "maps_url": f"https://www.google.com/maps?q={r['check_in_latitude']},{r['check_in_longitude']}"
+            "maps_url": f"https://www.google.com/maps%sq={r['check_in_latitude']},{r['check_in_longitude']}"
         }
         for r in rows
     ]
@@ -296,13 +297,13 @@ async def admin_verify_attendance(
     attendance_id: int,
     payload: AdminVerifyAttendanceSchema,
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 6.2: Admin review endpoint to set approval_status to APPROVED or REJECTED.
     """
     cursor = db.cursor()
-    cursor.execute("SELECT attendance_id, user_id, approval_status FROM attendance WHERE attendance_id = ?", (attendance_id,))
+    cursor.execute("SELECT attendance_id, user_id, approval_status FROM attendance WHERE attendance_id = %s", (attendance_id,))
     rec = cursor.fetchone()
 
     if not rec:
@@ -315,8 +316,8 @@ async def admin_verify_attendance(
 
     cursor.execute("""
         UPDATE attendance 
-        SET approval_status = ?, admin_comment = ?, verified_by = ?
-        WHERE attendance_id = ?
+        SET approval_status = %s, admin_comment = %s, verified_by = %s
+        WHERE attendance_id = %s
     """, (payload.approval_status, comment, admin_user["user_id"], attendance_id))
     db.commit()
 

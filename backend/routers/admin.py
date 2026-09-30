@@ -1,5 +1,6 @@
 import datetime
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status, Query
 from pydantic import BaseModel
 from typing import Optional
@@ -14,7 +15,7 @@ router = APIRouter(
 )
 
 @router.get("/overview")
-async def get_admin_overview(db: sqlite3.Connection = Depends(get_db)):
+async def get_admin_overview(db: psycopg2.extensions.connection = Depends(get_db)):
     """
     Prompt 4.2: Company-wide metrics & dashboard counts.
     """
@@ -46,7 +47,7 @@ async def get_admin_overview(db: sqlite3.Connection = Depends(get_db)):
 async def get_employees_directory(
     search: Optional[str] = Query(default=None),
     role: Optional[str] = Query(default=None),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 4.2: Interactive Employee Card Directory with search and filters.
@@ -63,12 +64,12 @@ async def get_employees_directory(
     params = []
 
     if search:
-        query += " AND (first_name LIKE ? OR last_name LIKE ? OR email LIKE ? OR employee_id LIKE ?)"
+        query += " AND (first_name LIKE %s OR last_name LIKE %s OR email LIKE %s OR employee_id LIKE %s)"
         s = f"%{search.strip()}%"
         params.extend([s, s, s, s])
 
     if role:
-        query += " AND role = ?"
+        query += " AND role = %s"
         params.append(role)
 
     query += " ORDER BY id ASC"
@@ -120,7 +121,7 @@ async def get_employees_directory(
 @router.get("/employees/{target_user_id}/context-view")
 async def get_employee_context_view(
     target_user_id: int,
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 4.2: Global Employee Context Switcher:
@@ -133,7 +134,7 @@ async def get_employee_context_view(
                profile_picture_url, job_title, department, joining_date, documents_url,
                salary_base, salary_allowances, salary_deductions, net_salary,
                leave_balance_paid, leave_balance_sick, is_email_verified, created_at
-        FROM users WHERE id = ?
+        FROM users WHERE id = %s
     """, (target_user_id,))
     u = cursor.fetchone()
 
@@ -144,21 +145,21 @@ async def get_employee_context_view(
     cursor.execute("""
         SELECT attendance_id, attendance_date, check_in_time, check_out_time,
                is_within_geofence, attendance_status, approval_status, admin_comment
-        FROM attendance WHERE user_id = ? ORDER BY attendance_date DESC LIMIT 10
+        FROM attendance WHERE user_id = %s ORDER BY attendance_date DESC LIMIT 10
     """, (target_user_id,))
     att_rows = cursor.fetchall()
 
     # Leave requests
     cursor.execute("""
         SELECT leave_id, leave_type, start_date, end_date, leave_reason, leave_status, admin_comment
-        FROM leave_requests WHERE user_id = ? ORDER BY created_at DESC
+        FROM leave_requests WHERE user_id = %s ORDER BY created_at DESC
     """, (target_user_id,))
     leave_rows = cursor.fetchall()
 
     # Payroll records
     cursor.execute("""
         SELECT payroll_id, salary_base, salary_allowances, salary_deductions, net_salary, updated_at
-        FROM payroll WHERE user_id = ? ORDER BY payroll_id DESC
+        FROM payroll WHERE user_id = %s ORDER BY payroll_id DESC
     """, (target_user_id,))
     pay_rows = cursor.fetchall()
 
@@ -192,7 +193,7 @@ async def get_employee_context_view(
     }
 
 @router.patch("/employees/{target_user_id}/unlock")
-async def unlock_employee(target_user_id: int, db: sqlite3.Connection = Depends(get_db)):
+async def unlock_employee(target_user_id: int, db: psycopg2.extensions.connection = Depends(get_db)):
     """
     Unlocks an account that was locked after 3 failed login attempts.
     """
@@ -200,7 +201,7 @@ async def unlock_employee(target_user_id: int, db: sqlite3.Connection = Depends(
     cursor.execute("""
         UPDATE users 
         SET failed_login_attempts = 0, locked_until = NULL, updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = %s
     """, (target_user_id,))
     db.commit()
 

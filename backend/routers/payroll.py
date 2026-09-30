@@ -1,5 +1,6 @@
 import json
-import sqlite3
+import psycopg2
+import psycopg2.extras
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
@@ -17,7 +18,7 @@ router = APIRouter(
 @router.get("/my-payslips")
 async def get_my_payroll_breakdown(
     current_user: dict = Depends(get_current_user),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 8.1: Employee Payroll View:
@@ -33,7 +34,7 @@ async def get_my_payroll_breakdown(
                u.employee_id, u.first_name, u.last_name, u.department, u.job_title
         FROM payroll p
         JOIN users u ON p.user_id = u.id
-        WHERE p.user_id = ?
+        WHERE p.user_id = %s
         ORDER BY p.payroll_id DESC
     """, (current_user["user_id"],))
     rows = cursor.fetchall()
@@ -81,7 +82,7 @@ async def get_my_payroll_breakdown(
 @router.get("/admin/overview")
 async def get_admin_payroll_overview(
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Prompt 8.2: Admin Payroll Control Workspace:
@@ -144,7 +145,7 @@ async def adjust_employee_payroll(
     target_user_id: int,
     payload: AdminAdjustPayrollSchema,
     admin_user: dict = Depends(require_role("HR_ADMIN")),
-    db: sqlite3.Connection = Depends(get_db)
+    db: psycopg2.extensions.connection = Depends(get_db)
 ):
     """
     Phase 2: Backend Calculation Engine (FastAPI)
@@ -158,7 +159,7 @@ async def adjust_employee_payroll(
     Step 6: Calculate Net Salary: Wage - (PF + PT).
     """
     cursor = db.cursor()
-    cursor.execute("SELECT id, email, salary_base FROM users WHERE id = ?", (target_user_id,))
+    cursor.execute("SELECT id, email, salary_base FROM users WHERE id = %s", (target_user_id,))
     target = cursor.fetchone()
 
     if not target:
@@ -210,12 +211,12 @@ async def adjust_employee_payroll(
     # Update users table
     cursor.execute("""
         UPDATE users 
-        SET monthly_wage = ?, basic_salary = ?, hra = ?, standard_allowance = ?,
-            performance_bonus = ?, lta = ?, fixed_allowance = ?, pf_employee = ?,
-            pf_employer = ?, professional_tax = ?, salary_config = ?,
-            salary_base = ?, salary_allowances = ?, salary_deductions = ?, net_salary = ?,
+        SET monthly_wage = %s, basic_salary = %s, hra = %s, standard_allowance = %s,
+            performance_bonus = %s, lta = %s, fixed_allowance = %s, pf_employee = %s,
+            pf_employer = %s, professional_tax = %s, salary_config = %s,
+            salary_base = %s, salary_allowances = %s, salary_deductions = %s, net_salary = %s,
             updated_at = CURRENT_TIMESTAMP
-        WHERE id = ?
+        WHERE id = %s
     """, (
         calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
         calc["performance_bonus"], calc["lta"], calc["fixed_allowance"], calc["pf_employee"],
@@ -225,18 +226,18 @@ async def adjust_employee_payroll(
     ))
 
     # Update or insert payroll table
-    cursor.execute("SELECT payroll_id FROM payroll WHERE user_id = ?", (target_user_id,))
+    cursor.execute("SELECT payroll_id FROM payroll WHERE user_id = %s", (target_user_id,))
     existing = cursor.fetchone()
 
     if existing:
         cursor.execute("""
             UPDATE payroll 
-            SET monthly_wage = ?, basic_salary = ?, hra = ?, standard_allowance = ?,
-                performance_bonus = ?, lta = ?, fixed_allowance = ?, pf_employee = ?,
-                pf_employer = ?, professional_tax = ?, salary_config = ?,
-                salary_base = ?, salary_allowances = ?, salary_deductions = ?, net_salary = ?,
+            SET monthly_wage = %s, basic_salary = %s, hra = %s, standard_allowance = %s,
+                performance_bonus = %s, lta = %s, fixed_allowance = %s, pf_employee = %s,
+                pf_employer = %s, professional_tax = %s, salary_config = %s,
+                salary_base = %s, salary_allowances = %s, salary_deductions = %s, net_salary = %s,
                 updated_at = CURRENT_TIMESTAMP
-            WHERE user_id = ?
+            WHERE user_id = %s
         """, (
             calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
             calc["performance_bonus"], calc["lta"], calc["fixed_allowance"], calc["pf_employee"],
@@ -252,7 +253,7 @@ async def adjust_employee_payroll(
                 professional_tax, salary_config, salary_base, salary_allowances,
                 salary_deductions, net_salary
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
         """, (
             target_user_id,
             calc["monthly_wage"], calc["basic_salary"], calc["hra"], calc["standard_allowance"],
